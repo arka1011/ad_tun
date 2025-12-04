@@ -1,14 +1,38 @@
+/*************************************************
+**************************************************
+**              Name: AD Tun Implementation      **
+**              Author: Arkaprava Das           **
+**************************************************
+**************************************************/
+
 #include "../include/ad_tun.h"
 #include "../../prebuilt/inih/include/ini.h"
 #include "../../prebuilt/zlog/include/zlog.h"
+
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/if.h>
+#include <linux/if_tun.h>
+#include <errno.h>
+#include <stdio.h>
+#include <sys/socket.h>
 
 /* Default values for ad_tun_config_t */
 #define DEFAULT_MTU 1500
 #define DEFAULT_PERSIST 0
 
-/* INI handler callback with logging */
+/* Internal module state */
+static ad_tun_state_t g_state = AD_TUN_STATE_UNINITIALIZED;
+static ad_tun_config_t g_cfg;
+static pthread_mutex_t g_state_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_tun_fd = -1;
+static int g_config_initialized = 0;
+
+/* ---- INI handler callback with logging ---- */
 static int ad_tun_ini_handler(void* user, const char* section,
                               const char* name, const char* value)
 {
@@ -120,4 +144,439 @@ ad_tun_error_t ad_tun_load_config(const char *path, ad_tun_config_t *out_cfg)
                out_cfg->mtu, out_cfg->persist);
 
     return AD_TUN_OK;
+}
+
+/* Initialize the TUN module with a config */
+ad_tun_error_t ad_tun_init(const ad_tun_config_t *cfg)
+{
+    if (!cfg) {
+        zlog_error(zlog_get_category("ad_tun"), "ad_tun_init called with NULL config");
+        return AD_TUN_ERR_CONFIG;
+    }
+
+    pthread_mutex_lock(&g_state_lock);
+
+    if (g_state != AD_TUN_STATE_UNINITIALIZED && g_state != AD_TUN_STATE_STOPPED) {
+        zlog_warn(zlog_get_category("ad_tun"), "ad_tun_init called while module in state %d", g_state);
+        pthread_mutex_unlock(&g_state_lock);
+        return AD_TUN_ERR_INVALID_STATE;
+    }
+
+    /* Clear previous config if any */
+    if (g_config_initialized) {
+        ad_tun_free_config(&g_cfg);
+        g_config_initialized = 0;
+    }
+
+    /* Copy strings */
+    memset(&g_cfg, 0, sizeof(g_cfg));
+
+    if (cfg->ifname) g_cfg.ifname = strdup(cfg->ifname);
+    if (cfg->ipv4)   g_cfg.ipv4   = strdup(cfg->ipv4);
+    if (cfg->ipv6)   g_cfg.ipv6   = strdup(cfg->ipv6);
+
+    g_cfg.mtu     = (cfg->mtu > 0) ? cfg->mtu : DEFAULT_MTU;
+    g_cfg.persist = (cfg->persist == 1) ? 1 : 0;
+
+    g_config_initialized = 1;
+    g_state = AD_TUN_STATE_INITIALIZED;
+
+    zlog_info(zlog_get_category("ad_tun"),
+              "ad_tun module initialized: ifname=%s, ipv4=%s, ipv6=%s, mtu=%d, persist=%d",
+              g_cfg.ifname, g_cfg.ipv4, g_cfg.ipv6 ? g_cfg.ipv6 : "none",
+              g_cfg.mtu, g_cfg.persist);
+
+    pthread_mutex_unlock(&g_state_lock);
+    return AD_TUN_OK;
+}
+
+/* Optional helper to get internal config pointer */
+const ad_tun_config_t* ad_tun_get_config(void)
+{
+    return &g_cfg;
+}
+
+/* Start the TUN interface */
+ad_tun_error_t ad_tun_start(void)
+{
+    zlog_category_t *zc = zlog_get_category("ad_tun");
+
+    pthread_mutex_lock(&g_state_lock);
+
+    /* Check module state */
+    if (!g_config_initialized) {
+        pthread_mutex_unlock(&g_state_lock);
+        zlog_error(zc, "Cannot start: configuration not initialized");
+        return AD_TUN_ERR_CONFIG;
+    }
+
+    if (g_state != AD_TUN_STATE_INITIALIZED && g_state != AD_TUN_STATE_STOPPED) {
+        pthread_mutex_unlock(&g_state_lock);
+        zlog_error(zc, "Cannot start: module is in wrong state (%d)", g_state);
+        return AD_TUN_ERR_INVALID_STATE;
+    }
+
+    /* Local copy so we release lock early */
+    ad_tun_config_t cfg = g_cfg;
+    pthread_mutex_unlock(&g_state_lock);
+
+    zlog_info(zc, "Starting TUN interface: %s", cfg.ifname);
+
+    /* Open /dev/net/tun */
+    int tun_fd = open("/dev/net/tun", O_RDWR | O_NONBLOCK);
+    if (tun_fd < 0) {
+        zlog_error(zc, "Failed to open /dev/net/tun: %s", strerror(errno));
+        return AD_TUN_ERR_NO_DEVICE;
+    }
+
+    /* Prepare interface request */
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    /* Use IFF_TUN and avoid packet information. */
+    ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
+    /* copy name */
+    strncpy(ifr.ifr_name, cfg.ifname, IFNAMSIZ - 1);
+
+    /* Issue ioctl */
+    if (ioctl(tun_fd, TUNSETIFF, (void *)&ifr) < 0) {
+        zlog_error(zc, "ioctl(TUNSETIFF) failed: %s", strerror(errno));
+        close(tun_fd);
+        return AD_TUN_ERR_SYS;
+    }
+
+    zlog_info(zc, "TUN interface %s created successfully", ifr.ifr_name);
+
+    /* Configure MTU via netlink/ioctl (we use ioctl SIOCSIFMTU here) */
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock >= 0) {
+        struct ifreq if_mtu;
+        memset(&if_mtu, 0, sizeof(if_mtu));
+        strncpy(if_mtu.ifr_name, cfg.ifname, IFNAMSIZ - 1);
+        if_mtu.ifr_mtu = cfg.mtu;
+
+        if (ioctl(sock, SIOCSIFMTU, &if_mtu) < 0) {
+            zlog_warn(zc, "Failed to set MTU=%d on %s: %s", cfg.mtu, cfg.ifname, strerror(errno));
+        } else {
+            zlog_info(zc, "Set MTU=%d on %s", cfg.mtu, cfg.ifname);
+        }
+
+        close(sock);
+    } else {
+        zlog_warn(zc, "Failed to open socket for MTU configuration: %s", strerror(errno));
+    }
+
+    /* Configure IPv4 */
+    if (cfg.ipv4) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd),
+                 "ip addr add %s dev %s >/dev/null 2>&1",
+                 cfg.ipv4, cfg.ifname);
+        if (system(cmd) != 0)
+            zlog_warn(zc, "Failed to assign IPv4: %s", cfg.ipv4);
+        else
+            zlog_info(zc, "Assigned IPv4: %s", cfg.ipv4);
+    }
+
+    /* Configure IPv6 */
+    if (cfg.ipv6) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd),
+                 "ip -6 addr add %s dev %s >/dev/null 2>&1",
+                 cfg.ipv6, cfg.ifname);
+        if (system(cmd) != 0)
+            zlog_warn(zc, "Failed to assign IPv6: %s", cfg.ipv6);
+        else
+            zlog_info(zc, "Assigned IPv6: %s", cfg.ipv6);
+    }
+
+    /* Bring interface up */
+    {
+        char cmd[128];
+        snprintf(cmd, sizeof(cmd),
+                 "ip link set dev %s up >/dev/null 2>&1", cfg.ifname);
+        if (system(cmd) != 0)
+            zlog_warn(zc, "Failed to bring interface up");
+        else
+            zlog_info(zc, "Interface %s is now UP", cfg.ifname);
+    }
+
+    /* Update state */
+    pthread_mutex_lock(&g_state_lock);
+    g_state = AD_TUN_STATE_RUNNING;
+    g_tun_fd = tun_fd; /* fixed assignment */
+    pthread_mutex_unlock(&g_state_lock);
+
+    zlog_info(zc, "ad_tun_start() completed successfully");
+
+    return AD_TUN_OK;
+}
+
+/* Stop the TUN interface */
+ad_tun_error_t ad_tun_stop(void)
+{
+    zlog_category_t *zc = zlog_get_category("ad_tun");
+
+    pthread_mutex_lock(&g_state_lock);
+
+    if (!g_config_initialized) {
+        zlog_error(zc, "ad_tun_stop(): Config not initialized");
+        pthread_mutex_unlock(&g_state_lock);
+        return AD_TUN_ERR_INVALID_STATE;
+    }
+
+    if (g_state != AD_TUN_STATE_RUNNING) {
+        zlog_warn(zc, "ad_tun_stop(): Interface is not running (state=%d)", g_state);
+        pthread_mutex_unlock(&g_state_lock);
+        return AD_TUN_ERR_INVALID_STATE;
+    }
+
+    /* Snapshot fd & ifname */
+    int fd = g_tun_fd;
+    const char *ifname = g_cfg.ifname;
+
+    pthread_mutex_unlock(&g_state_lock);
+
+    /* Bring interface down */
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "ip link set %s down >/dev/null 2>&1", ifname);
+    int rc = system(cmd);
+    if (rc != 0) {
+        zlog_warn(zc, "Failed to bring interface %s down (rc=%d)", ifname, rc);
+        /* non-fatal — continue stopping */
+    }
+
+    /* Close TUN file descriptor */
+    if (fd >= 0) {
+        close(fd);
+    }
+
+    /* Clear global state */
+    pthread_mutex_lock(&g_state_lock);
+    g_tun_fd = -1;
+    g_state = AD_TUN_STATE_STOPPED;
+    pthread_mutex_unlock(&g_state_lock);
+
+    zlog_info(zc, "TUN interface %s stopped successfully", ifname);
+
+    return AD_TUN_OK;
+}
+
+/* Cleanup the TUN module */
+ad_tun_error_t ad_tun_cleanup(void)
+{
+    zlog_category_t *zc = zlog_get_category("ad_tun");
+
+    pthread_mutex_lock(&g_state_lock);
+
+    /* If uninitialized, cleanup is a no-op */
+    if (g_state == AD_TUN_STATE_UNINITIALIZED) {
+        pthread_mutex_unlock(&g_state_lock);
+        zlog_info(zc, "Cleanup requested but module already uninitialized");
+        return AD_TUN_OK;
+    }
+
+    /* If still running, stop it first */
+    if (g_state == AD_TUN_STATE_RUNNING) {
+        pthread_mutex_unlock(&g_state_lock);  // release before calling stop()
+        ad_tun_stop();                         // safe: stop() locks internally
+        pthread_mutex_lock(&g_state_lock);     // re-acquire lock
+    }
+
+    /*
+     * Now we are guaranteed the module is not RUNNING.
+     * Free configuration if it was allocated.
+     */
+    if (g_config_initialized) {
+        ad_tun_free_config(&g_cfg);  // frees strings if dynamically allocated
+        memset(&g_cfg, 0, sizeof(g_cfg));
+        g_config_initialized = 0;
+    }
+
+    /* Reset global state */
+    g_state = AD_TUN_STATE_UNINITIALIZED;
+
+    pthread_mutex_unlock(&g_state_lock);
+
+    zlog_info(zc, "Cleanup completed successfully");
+
+    return AD_TUN_OK;
+}
+
+/* Restart the TUN interface */
+ad_tun_error_t ad_tun_restart(void)
+{
+    ad_tun_error_t err;
+
+    /* First stop the interface */
+    err = ad_tun_stop();
+    if (err != AD_TUN_OK) {
+        return err;
+    }
+
+    /* Then start it again */
+    err = ad_tun_start();
+    if (err != AD_TUN_OK) {
+        return err;
+    }
+
+    return AD_TUN_OK;
+}
+
+/* Read data from the TUN interface */
+ssize_t ad_tun_read(char *buf, size_t buf_len)
+{
+    zlog_category_t *zc = zlog_get_category("ad_tun");
+
+    if (!buf || buf_len == 0) {
+        zlog_error(zc, "ad_tun_read: invalid buffer");
+        return -EINVAL;
+    }
+
+    /* Ensure module is running */
+    pthread_mutex_lock(&g_state_lock);
+    int running = (g_state == AD_TUN_STATE_RUNNING && g_tun_fd > 0);
+    int fd = g_tun_fd;
+    pthread_mutex_unlock(&g_state_lock);
+
+    if (!running) {
+        zlog_error(zc, "ad_tun_read: called while module not running");
+        return -EIO;
+    }
+
+    ssize_t n = read(fd, buf, buf_len);
+
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            /* No data available */
+            return -EAGAIN;
+        }
+        zlog_error(zc, "ad_tun_read: read() failed: %s", strerror(errno));
+        return -EIO;
+    }
+
+    zlog_debug(zc, "ad_tun_read: read %zd bytes from TUN", n);
+    return n;
+}
+
+/* Write data to the TUN interface */
+ssize_t ad_tun_write(const char *buf, size_t buf_len)
+{
+    zlog_category_t *zc = zlog_get_category("ad_tun");
+
+    if (!buf || buf_len == 0) {
+        zlog_error(zc, "ad_tun_write: invalid buffer");
+        return -EINVAL;
+    }
+
+    /* Ensure module is running */
+    pthread_mutex_lock(&g_state_lock);
+    int running = (g_state == AD_TUN_STATE_RUNNING && g_tun_fd > 0);
+    int fd = g_tun_fd;
+    pthread_mutex_unlock(&g_state_lock);
+
+    if (!running) {
+        zlog_error(zc, "ad_tun_write: called while module not running");
+        return -EIO;
+    }
+
+    ssize_t n = write(fd, buf, buf_len);
+
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            /* Write would block */
+            return -EAGAIN;
+        }
+        zlog_error(zc, "ad_tun_write: write() failed: %s", strerror(errno));
+        return -EIO;
+    }
+
+    zlog_debug(zc, "ad_tun_write: wrote %zd bytes to TUN", n);
+    return n;
+}
+
+/* Return the TUN file descriptor */
+int ad_tun_get_fd(void)
+{
+    pthread_mutex_lock(&g_state_lock);
+    int fd = g_tun_fd;
+    pthread_mutex_unlock(&g_state_lock);
+
+    return fd;
+}
+
+/* Return interface name (e.g., "tun0") */
+const char* ad_tun_get_name(void)
+{
+    pthread_mutex_lock(&g_state_lock);
+    const char *name = g_cfg.ifname;
+    pthread_mutex_unlock(&g_state_lock);
+
+    return name;
+}
+
+/* Return configured MTU */
+int ad_tun_get_mtu(void)
+{
+    pthread_mutex_lock(&g_state_lock);
+    int mtu = g_cfg.mtu;
+    pthread_mutex_unlock(&g_state_lock);
+
+    return mtu;
+}
+
+/* Return configured IPv4 address */
+const char* ad_tun_get_ipv4(void)
+{
+    pthread_mutex_lock(&g_state_lock);
+    const char *ip = g_cfg.ipv4;
+    pthread_mutex_unlock(&g_state_lock);
+
+    return ip;
+}
+
+/* Return configured IPv6 address */
+const char* ad_tun_get_ipv6(void)
+{
+    pthread_mutex_lock(&g_state_lock);
+    const char *ip6 = g_cfg.ipv6;
+    pthread_mutex_unlock(&g_state_lock);
+
+    return ip6;
+}
+
+/* Return current module state */
+ad_tun_state_t ad_tun_get_state(void)
+{
+    pthread_mutex_lock(&g_state_lock);
+    ad_tun_state_t s = g_state;
+    pthread_mutex_unlock(&g_state_lock);
+
+    return s;
+}
+
+/* Convert error code to string */
+const char* ad_tun_strerror(ad_tun_error_t err)
+{
+    switch (err) {
+    case AD_TUN_OK:
+        return "Operation successful";
+
+    case AD_TUN_ERR_INVALID_STATE:
+        return "Invalid state for requested operation";
+
+    case AD_TUN_ERR_NO_DEVICE:
+        return "TUN device not available or could not be opened";
+
+    case AD_TUN_ERR_SYS:
+        return "System-level error (check errno)";
+
+    case AD_TUN_ERR_CONFIG:
+        return "Invalid or missing configuration";
+
+    case AD_TUN_ERR_INTERNAL:
+        return "Internal error";
+
+    default:
+        return "Unknown error";
+    }
 }
