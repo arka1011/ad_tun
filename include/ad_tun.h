@@ -49,6 +49,24 @@ typedef struct {
 } ad_tun_config_t;
 
 /**
+ * @brief Load AD-TUN configuration from an INI file.
+ *
+ * @param path Path to the INI configuration file.
+ * @param out_cfg Pointer to a caller-allocated config struct to fill.
+ *
+ * @return AD_TUN_OK on success, or appropriate error code.
+ *
+ * @note All strings in out_cfg will be heap-allocated using strdup().
+ *       Caller is responsible for freeing them using ad_tun_free_config().
+ */
+ad_tun_error_t ad_tun_load_config(const char *path, ad_tun_config_t *out_cfg);
+
+/**
+ * @brief Free all heap-allocated fields inside ad_tun_config_t.
+ */
+void ad_tun_free_config(ad_tun_config_t *cfg);
+
+/**
  * @brief Initialize the TUN interface with the given configuration.
  *
  * Must be called before any other operation.
