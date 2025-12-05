@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
-project(ad_tun C)
+
+project(ad_tun 
+    VERSION 1.0
+    LANGUAGES C CXX
+)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -34,3 +38,8 @@ target_link_libraries(ad_tun
 # Optional install rules
 install(TARGETS ad_tun DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
+
+enable_testing()
+
+add_subdirectory(tests)
+
