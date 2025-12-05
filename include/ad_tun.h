@@ -132,13 +132,11 @@ ssize_t ad_tun_write(const char *buf, size_t buf_len);
 int ad_tun_get_fd(void);
 
 /**
- * @brief Get the configuration used to initialize the interface.
+ * @brief Get a copy of the configuration used to initialize the interface.
  *
- * Returned pointer must not be modified.
- *
- * @return Pointer to internal config, or NULL if uninitialized.
+ * @return A copy of the internal config.
  */
-const ad_tun_config_t* ad_tun_get_config(void);
+ad_tun_config_t ad_tun_get_config_copy(void);
 
 /**
  * @brief Get the interface name.

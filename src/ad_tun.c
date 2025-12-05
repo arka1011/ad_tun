@@ -190,12 +190,6 @@ ad_tun_error_t ad_tun_init(const ad_tun_config_t *cfg)
     return AD_TUN_OK;
 }
 
-/* Optional helper to get internal config pointer */
-const ad_tun_config_t* ad_tun_get_config(void)
-{
-    return &g_cfg;
-}
-
 /* Start the TUN interface */
 ad_tun_error_t ad_tun_start(void)
 {
@@ -502,6 +496,18 @@ int ad_tun_get_fd(void)
     pthread_mutex_unlock(&g_state_lock);
 
     return fd;
+}
+
+/* Helper to get internal config pointer */
+ad_tun_config_t ad_tun_get_config_copy(void)
+{
+    ad_tun_config_t copy;
+
+    pthread_mutex_lock(&g_state_lock);
+    copy = g_cfg;  // safe, atomic copy of struct
+    pthread_mutex_unlock(&g_state_lock);
+
+    return copy;
 }
 
 /* Return interface name (e.g., "tun0") */
