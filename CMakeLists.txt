@@ -23,7 +23,7 @@ set(AD_TUN_SOURCES
 # ---- CREATE THE TARGET FIRST ----
 add_library(ad_tun SHARED ${AD_TUN_SOURCES})
 
-# ---- NOW SAFE TO ADD INCLUDE DIRS ----
+# ---- ADD INCLUDE DIRS ----
 target_include_directories(ad_tun PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/../prebuilt/inih/include
@@ -32,14 +32,9 @@ target_include_directories(ad_tun PRIVATE
 
 # ---- LINK LIBRARIES ----
 target_link_libraries(ad_tun
-    ${CMAKE_SOURCE_DIR}/../prebuilt/zlog/libs/libzlog.so
+    ${CMAKE_SOURCE_DIR}/../prebuilt/zlog/lib/libzlog.so
 )
 
-# Optional install rules
-install(TARGETS ad_tun DESTINATION lib)
-install(DIRECTORY include/ DESTINATION include)
-
 enable_testing()
-
 add_subdirectory(tests)
 
