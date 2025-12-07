@@ -1,11 +1,12 @@
 /*************************************************
 **************************************************
-**              Name: AD Tun Implementation      **
+**              Name: AD Tun Implementation     **
 **              Author: Arkaprava Das           **
 **************************************************
 **************************************************/
 
 #include "../include/ad_tun.h"
+#include "../include/ad_tun_helper.h"
 #include "../../prebuilt/inih/include/ini.h"
 #include "../../prebuilt/zlog/include/zlog.h"
 
@@ -91,6 +92,9 @@ void ad_tun_free_config(ad_tun_config_t *cfg)
 /* Load configuration from INI file */
 ad_tun_error_t ad_tun_load_config(const char *path, ad_tun_config_t *out_cfg)
 {
+    /* Ensure zlog is initialized before any logging calls. Ignore errors and fall back to stderr. */
+    ad_tun_zlog_init();
+
     if (!path || !out_cfg) {
         zlog_error(zlog_get_category("ad_tun"), "Invalid arguments to ad_tun_load_config()");
         return AD_TUN_ERR_CONFIG;
@@ -106,7 +110,10 @@ ad_tun_error_t ad_tun_load_config(const char *path, ad_tun_config_t *out_cfg)
 
     int rc = ini_parse(path, ad_tun_ini_handler, out_cfg);
     if (rc < 0) {
-        zlog_error(zc, "Failed to parse config file: %s", path);
+        zlog_error(zc, "Failed to open config file: %s", path);
+        return AD_TUN_ERR_CONFIG;
+    } else if (rc > 0) {
+        zlog_error(zc, "Parsing error at line %d in config file %s", rc, path);
         return AD_TUN_ERR_CONFIG;
     }
 
@@ -149,6 +156,9 @@ ad_tun_error_t ad_tun_load_config(const char *path, ad_tun_config_t *out_cfg)
 /* Initialize the TUN module with a config */
 ad_tun_error_t ad_tun_init(const ad_tun_config_t *cfg)
 {
+    /* Ensure zlog initialized */
+    ad_tun_zlog_init();
+
     if (!cfg) {
         zlog_error(zlog_get_category("ad_tun"), "ad_tun_init called with NULL config");
         return AD_TUN_ERR_CONFIG;
@@ -393,6 +403,9 @@ ad_tun_error_t ad_tun_cleanup(void)
 
     zlog_info(zc, "Cleanup completed successfully");
 
+    /* Finalize zlog if we initialized it */
+    ad_tun_zlog_fini();
+
     return AD_TUN_OK;
 }
 
@@ -558,6 +571,50 @@ ad_tun_state_t ad_tun_get_state(void)
     pthread_mutex_unlock(&g_state_lock);
 
     return s;
+}
+
+/* zlog initialization helper */
+static int ad_tun_zlog_init(void)
+{
+    pthread_mutex_lock(&g_zlog_lock);
+
+    if (!g_zlog_initialized) {
+        if (!g_zlog_file_cfg) {
+            pthread_mutex_unlock(&g_zlog_lock);
+            fprintf(stderr, "ERR: zlog config path is NULL\n");
+            return -1;
+        }
+        if (zlog_init(g_zlog_file_cfg) != 0) {
+            pthread_mutex_unlock(&g_zlog_lock);
+            fprintf(stderr, "ERR: zlog_init failed with config '%s'\n", g_zlog_file_cfg);
+            return -1;
+        }
+        g_zlog_initialized = 1;
+    }
+
+    pthread_mutex_unlock(&g_zlog_lock);
+
+    zlog_category_t *zc = zlog_get_category("ad_tun");
+    if (!zc) {
+        fprintf(stderr, "ERR: failed to get zlog category 'ad_tun'\n");
+        return -1;
+    }
+    zlog_info(zc, "zlog initialized with config: %s", g_zlog_file_cfg);
+
+    return 0;
+}
+
+/* zlog finalization helper */
+static void ad_tun_zlog_fini(void)
+{
+    pthread_mutex_lock(&g_zlog_lock);
+    if (!g_zlog_initialized) {
+        pthread_mutex_unlock(&g_zlog_lock);
+        return;
+    }
+    zlog_fini();
+    g_zlog_initialized = 0;
+    pthread_mutex_unlock(&g_zlog_lock);
 }
 
 /* Convert error code to string */

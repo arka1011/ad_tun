@@ -173,12 +173,4 @@ const char* ad_tun_get_ipv6(void);
  */
 ad_tun_state_t ad_tun_get_state(void);
 
-/**
- * @brief Convert an error code to a human-readable string.
- *
- * @param err Error code.
- * @return Static string describing the error.
- */
-const char* ad_tun_strerror(ad_tun_error_t err);
-
 #endif
