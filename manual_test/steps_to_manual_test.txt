@@ -1,0 +1,5 @@
+Run the following after building ad_tun as per README.md
+
+1. gcc -c ad_tun_test.c -o ad_tun_test.o
+2. gcc ad_tun_test.o -L../build/lib -lad_tun -Wl,-rpath=../build/lib -o ad_tun_test
+3. sudo ./ad_tun_test
