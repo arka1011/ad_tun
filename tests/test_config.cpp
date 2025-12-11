@@ -1,7 +1,7 @@
-#include <gtest/gtest.h>
+#include "../../../prebuilt/googletest/googletest/include/gtest/gtest.h"
 
 extern "C" {
-#include "ad_tun.h"
+#include "../include/ad_tun.h"
 }
 
 TEST(ConfigTest, LoadValidConfig) {

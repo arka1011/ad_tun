@@ -6,10 +6,8 @@
 **************************************************/
 
 #include "../include/ad_tun.h"
-#include "../include/ad_tun_helper.h"
-#include "../../prebuilt/inih/include/ini.h"
-#include "../../prebuilt/zlog/include/zlog.h"
-
+#include "../../../prebuilt/inih/include/ini.h"
+#include "../../ad_logger/include/ad_logger.h"
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
@@ -38,32 +36,31 @@ static int ad_tun_ini_handler(void* user, const char* section,
                               const char* name, const char* value)
 {
     ad_tun_config_t* cfg = (ad_tun_config_t*)user;
-    zlog_category_t *zc = zlog_get_category("ad_tun");
 
     /* Only handle [ad_tun] section */
     if (strcmp(section, "ad_tun") != 0) {
-        zlog_debug(zc, "Ignoring section: %s", section);
+        AD_LOG_TUN_DEBUG("Ignoring section: %s", section);
         return 1; // ignore other sections
     }
 
-    zlog_debug(zc, "Parsing config key: [%s] %s = %s", section, name, value);
+    AD_LOG_TUN_DEBUG("Parsing config key: [%s] %s = %s", section, name, value);
 
     if (strcmp(name, "ifname") == 0) {
         cfg->ifname = strdup(value);
         if (!cfg->ifname) {
-            zlog_error(zc, "Memory allocation failed for 'ifname'");
+            AD_LOG_TUN_ERROR("Memory allocation failed for 'ifname'");
             return 0; // fail parsing
         }
     } else if (strcmp(name, "ipv4") == 0) {
         cfg->ipv4 = strdup(value);
         if (!cfg->ipv4) {
-            zlog_error(zc, "Memory allocation failed for 'ipv4'");
+            AD_LOG_TUN_ERROR("Memory allocation failed for 'ipv4'");
             return 0;
         }
     } else if (strcmp(name, "ipv6") == 0) {
         cfg->ipv6 = strdup(value);
         if (!cfg->ipv6) {
-            zlog_warn(zc, "Memory allocation failed for 'ipv6', IPv6 disabled");
+            AD_LOG_TUN_WARN("Memory allocation failed for 'ipv6', IPv6 disabled");
             cfg->ipv6 = NULL;
         }
     } else if (strcmp(name, "mtu") == 0) {
@@ -71,7 +68,7 @@ static int ad_tun_ini_handler(void* user, const char* section,
     } else if (strcmp(name, "persist") == 0) {
         cfg->persist = atoi(value);
     } else {
-        zlog_warn(zc, "Unknown config key ignored: %s", name);
+        AD_LOG_TUN_WARN("Unknown config key ignored: %s", name);
     }
 
     return 1; // success
@@ -92,11 +89,8 @@ void ad_tun_free_config(ad_tun_config_t *cfg)
 /* Load configuration from INI file */
 ad_tun_error_t ad_tun_load_config(const char *path, ad_tun_config_t *out_cfg)
 {
-    /* Ensure zlog is initialized before any logging calls. Ignore errors and fall back to stderr. */
-    ad_tun_zlog_init();
-
     if (!path || !out_cfg) {
-        zlog_error(zlog_get_category("ad_tun"), "Invalid arguments to ad_tun_load_config()");
+        AD_LOG_TUN_ERROR("Invalid arguments to ad_tun_load_config()");
         return AD_TUN_ERR_CONFIG;
     }
 
@@ -105,48 +99,47 @@ ad_tun_error_t ad_tun_load_config(const char *path, ad_tun_config_t *out_cfg)
     out_cfg->mtu = DEFAULT_MTU;
     out_cfg->persist = DEFAULT_PERSIST;
 
-    zlog_category_t *zc = zlog_get_category("ad_tun");
-    zlog_info(zc, "Loading config file: %s", path);
+    AD_LOG_TUN_INFO("Loading config file: %s", path);
 
     int rc = ini_parse(path, ad_tun_ini_handler, out_cfg);
     if (rc < 0) {
-        zlog_error(zc, "Failed to open config file: %s", path);
+        AD_LOG_TUN_ERROR("Failed to open config file: %s", path);
         return AD_TUN_ERR_CONFIG;
     } else if (rc > 0) {
-        zlog_error(zc, "Parsing error at line %d in config file %s", rc, path);
+        AD_LOG_TUN_ERROR("Parsing error at line %d in config file %s", rc, path);
         return AD_TUN_ERR_CONFIG;
     }
 
     /* Validate required fields */
     if (!out_cfg->ifname || strlen(out_cfg->ifname) == 0) {
-        zlog_error(zc, "Config error: 'ifname' is missing or empty");
+        AD_LOG_TUN_ERROR("Config error: 'ifname' is missing or empty");
         ad_tun_free_config(out_cfg);
         return AD_TUN_ERR_CONFIG;
     }
 
     if (!out_cfg->ipv4 || strlen(out_cfg->ipv4) == 0) {
-        zlog_error(zc, "Config error: 'ipv4' is missing or empty");
+        AD_LOG_TUN_ERROR("Config error: 'ipv4' is missing or empty");
         ad_tun_free_config(out_cfg);
         return AD_TUN_ERR_CONFIG;
     }
 
     if (!out_cfg->ipv6 || strlen(out_cfg->ipv6) == 0) {
-        zlog_warn(zc, "'ipv6' is missing or empty — IPv6 will be disabled");
+        AD_LOG_TUN_WARN("'ipv6' is missing or empty — IPv6 will be disabled");
         out_cfg->ipv6 = NULL;
     }
 
     if (out_cfg->mtu <= 0 || out_cfg->mtu > 9000) {
-        zlog_warn(zc, "Config warning: 'mtu' is invalid (%d), using default %d", out_cfg->mtu, DEFAULT_MTU);
+        AD_LOG_TUN_WARN("Config warning: 'mtu' is invalid (%d), using default %d", out_cfg->mtu, DEFAULT_MTU);
         out_cfg->mtu = DEFAULT_MTU;
     }
 
     if (out_cfg->persist != 0 && out_cfg->persist != 1) {
-        zlog_warn(zc, "Config warning: 'persist' should be 0 or 1, using default %d", DEFAULT_PERSIST);
+        AD_LOG_TUN_WARN("Config warning: 'persist' should be 0 or 1, using default %d", DEFAULT_PERSIST);
         out_cfg->persist = DEFAULT_PERSIST;
     }
 
-    zlog_info(zc, "Config loaded successfully from %s", path);
-    zlog_debug(zc, "ifname=%s, ipv4=%s, ipv6=%s, mtu=%d, persist=%d",
+    AD_LOG_TUN_INFO("Config loaded successfully from %s", path);
+    AD_LOG_TUN_DEBUG("ifname=%s, ipv4=%s, ipv6=%s, mtu=%d, persist=%d",
                out_cfg->ifname, out_cfg->ipv4, out_cfg->ipv6 ? out_cfg->ipv6 : "none",
                out_cfg->mtu, out_cfg->persist);
 
@@ -156,18 +149,15 @@ ad_tun_error_t ad_tun_load_config(const char *path, ad_tun_config_t *out_cfg)
 /* Initialize the TUN module with a config */
 ad_tun_error_t ad_tun_init(const ad_tun_config_t *cfg)
 {
-    /* Ensure zlog initialized */
-    ad_tun_zlog_init();
-
     if (!cfg) {
-        zlog_error(zlog_get_category("ad_tun"), "ad_tun_init called with NULL config");
+        AD_LOG_TUN_ERROR("ad_tun_init called with NULL config");
         return AD_TUN_ERR_CONFIG;
     }
 
     pthread_mutex_lock(&g_state_lock);
 
     if (g_state != AD_TUN_STATE_UNINITIALIZED && g_state != AD_TUN_STATE_STOPPED) {
-        zlog_warn(zlog_get_category("ad_tun"), "ad_tun_init called while module in state %d", g_state);
+        AD_LOG_TUN_WARN("ad_tun_init called while module in state %d", g_state);
         pthread_mutex_unlock(&g_state_lock);
         return AD_TUN_ERR_INVALID_STATE;
     }
@@ -191,8 +181,7 @@ ad_tun_error_t ad_tun_init(const ad_tun_config_t *cfg)
     g_config_initialized = 1;
     g_state = AD_TUN_STATE_INITIALIZED;
 
-    zlog_info(zlog_get_category("ad_tun"),
-              "ad_tun module initialized: ifname=%s, ipv4=%s, ipv6=%s, mtu=%d, persist=%d",
+    AD_LOG_TUN_INFO("ad_tun module initialized: ifname=%s, ipv4=%s, ipv6=%s, mtu=%d, persist=%d",
               g_cfg.ifname, g_cfg.ipv4, g_cfg.ipv6 ? g_cfg.ipv6 : "none",
               g_cfg.mtu, g_cfg.persist);
 
@@ -203,20 +192,18 @@ ad_tun_error_t ad_tun_init(const ad_tun_config_t *cfg)
 /* Start the TUN interface */
 ad_tun_error_t ad_tun_start(void)
 {
-    zlog_category_t *zc = zlog_get_category("ad_tun");
-
     pthread_mutex_lock(&g_state_lock);
 
     /* Check module state */
     if (!g_config_initialized) {
         pthread_mutex_unlock(&g_state_lock);
-        zlog_error(zc, "Cannot start: configuration not initialized");
+        AD_LOG_TUN_ERROR("Cannot start: configuration not initialized");
         return AD_TUN_ERR_CONFIG;
     }
 
     if (g_state != AD_TUN_STATE_INITIALIZED && g_state != AD_TUN_STATE_STOPPED) {
         pthread_mutex_unlock(&g_state_lock);
-        zlog_error(zc, "Cannot start: module is in wrong state (%d)", g_state);
+        AD_LOG_TUN_ERROR("Cannot start: module is in wrong state (%d)", g_state);
         return AD_TUN_ERR_INVALID_STATE;
     }
 
@@ -224,12 +211,12 @@ ad_tun_error_t ad_tun_start(void)
     ad_tun_config_t cfg = g_cfg;
     pthread_mutex_unlock(&g_state_lock);
 
-    zlog_info(zc, "Starting TUN interface: %s", cfg.ifname);
+    AD_LOG_TUN_INFO("Starting TUN interface: %s", cfg.ifname);
 
     /* Open /dev/net/tun */
     int tun_fd = open("/dev/net/tun", O_RDWR | O_NONBLOCK);
     if (tun_fd < 0) {
-        zlog_error(zc, "Failed to open /dev/net/tun: %s", strerror(errno));
+        AD_LOG_TUN_ERROR("Failed to open /dev/net/tun: %s", strerror(errno));
         return AD_TUN_ERR_NO_DEVICE;
     }
 
@@ -243,12 +230,12 @@ ad_tun_error_t ad_tun_start(void)
 
     /* Issue ioctl */
     if (ioctl(tun_fd, TUNSETIFF, (void *)&ifr) < 0) {
-        zlog_error(zc, "ioctl(TUNSETIFF) failed: %s", strerror(errno));
+        AD_LOG_TUN_ERROR("ioctl(TUNSETIFF) failed: %s", strerror(errno));
         close(tun_fd);
         return AD_TUN_ERR_SYS;
     }
 
-    zlog_info(zc, "TUN interface %s created successfully", ifr.ifr_name);
+    AD_LOG_TUN_INFO("TUN interface %s created successfully", ifr.ifr_name);
 
     /* Configure MTU via netlink/ioctl (we use ioctl SIOCSIFMTU here) */
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -259,14 +246,14 @@ ad_tun_error_t ad_tun_start(void)
         if_mtu.ifr_mtu = cfg.mtu;
 
         if (ioctl(sock, SIOCSIFMTU, &if_mtu) < 0) {
-            zlog_warn(zc, "Failed to set MTU=%d on %s: %s", cfg.mtu, cfg.ifname, strerror(errno));
+            AD_LOG_TUN_WARN("Failed to set MTU=%d on %s: %s", cfg.mtu, cfg.ifname, strerror(errno));
         } else {
-            zlog_info(zc, "Set MTU=%d on %s", cfg.mtu, cfg.ifname);
+            AD_LOG_TUN_INFO("Set MTU=%d on %s", cfg.mtu, cfg.ifname);
         }
 
         close(sock);
     } else {
-        zlog_warn(zc, "Failed to open socket for MTU configuration: %s", strerror(errno));
+        AD_LOG_TUN_WARN("Failed to open socket for MTU configuration: %s", strerror(errno));
     }
 
     /* Configure IPv4 */
@@ -276,9 +263,9 @@ ad_tun_error_t ad_tun_start(void)
                  "ip addr add %s dev %s >/dev/null 2>&1",
                  cfg.ipv4, cfg.ifname);
         if (system(cmd) != 0)
-            zlog_warn(zc, "Failed to assign IPv4: %s", cfg.ipv4);
+            AD_LOG_TUN_WARN("Failed to assign IPv4: %s", cfg.ipv4);
         else
-            zlog_info(zc, "Assigned IPv4: %s", cfg.ipv4);
+            AD_LOG_TUN_INFO("Assigned IPv4: %s", cfg.ipv4);
     }
 
     /* Configure IPv6 */
@@ -288,9 +275,9 @@ ad_tun_error_t ad_tun_start(void)
                  "ip -6 addr add %s dev %s >/dev/null 2>&1",
                  cfg.ipv6, cfg.ifname);
         if (system(cmd) != 0)
-            zlog_warn(zc, "Failed to assign IPv6: %s", cfg.ipv6);
+            AD_LOG_TUN_WARN("Failed to assign IPv6: %s", cfg.ipv6);
         else
-            zlog_info(zc, "Assigned IPv6: %s", cfg.ipv6);
+            AD_LOG_TUN_INFO("Assigned IPv6: %s", cfg.ipv6);
     }
 
     /* Bring interface up */
@@ -299,9 +286,9 @@ ad_tun_error_t ad_tun_start(void)
         snprintf(cmd, sizeof(cmd),
                  "ip link set dev %s up >/dev/null 2>&1", cfg.ifname);
         if (system(cmd) != 0)
-            zlog_warn(zc, "Failed to bring interface up");
+            AD_LOG_TUN_WARN("Failed to bring interface up");
         else
-            zlog_info(zc, "Interface %s is now UP", cfg.ifname);
+            AD_LOG_TUN_INFO("Interface %s is now UP", cfg.ifname);
     }
 
     /* Update state */
@@ -310,7 +297,7 @@ ad_tun_error_t ad_tun_start(void)
     g_tun_fd = tun_fd; /* fixed assignment */
     pthread_mutex_unlock(&g_state_lock);
 
-    zlog_info(zc, "ad_tun_start() completed successfully");
+    AD_LOG_TUN_INFO("ad_tun_start() completed successfully");
 
     return AD_TUN_OK;
 }
@@ -318,18 +305,17 @@ ad_tun_error_t ad_tun_start(void)
 /* Stop the TUN interface */
 ad_tun_error_t ad_tun_stop(void)
 {
-    zlog_category_t *zc = zlog_get_category("ad_tun");
 
     pthread_mutex_lock(&g_state_lock);
 
     if (!g_config_initialized) {
-        zlog_error(zc, "ad_tun_stop(): Config not initialized");
+        AD_LOG_TUN_ERROR("ad_tun_stop(): Config not initialized");
         pthread_mutex_unlock(&g_state_lock);
         return AD_TUN_ERR_INVALID_STATE;
     }
 
     if (g_state != AD_TUN_STATE_RUNNING) {
-        zlog_warn(zc, "ad_tun_stop(): Interface is not running (state=%d)", g_state);
+        AD_LOG_TUN_WARN("ad_tun_stop(): Interface is not running (state=%d)", g_state);
         pthread_mutex_unlock(&g_state_lock);
         return AD_TUN_ERR_INVALID_STATE;
     }
@@ -345,7 +331,7 @@ ad_tun_error_t ad_tun_stop(void)
     snprintf(cmd, sizeof(cmd), "ip link set %s down >/dev/null 2>&1", ifname);
     int rc = system(cmd);
     if (rc != 0) {
-        zlog_warn(zc, "Failed to bring interface %s down (rc=%d)", ifname, rc);
+        AD_LOG_TUN_WARN("Failed to bring interface %s down (rc=%d)", ifname, rc);
         /* non-fatal — continue stopping */
     }
 
@@ -360,7 +346,7 @@ ad_tun_error_t ad_tun_stop(void)
     g_state = AD_TUN_STATE_STOPPED;
     pthread_mutex_unlock(&g_state_lock);
 
-    zlog_info(zc, "TUN interface %s stopped successfully", ifname);
+    AD_LOG_TUN_INFO("TUN interface %s stopped successfully", ifname);
 
     return AD_TUN_OK;
 }
@@ -368,14 +354,13 @@ ad_tun_error_t ad_tun_stop(void)
 /* Cleanup the TUN module */
 ad_tun_error_t ad_tun_cleanup(void)
 {
-    zlog_category_t *zc = zlog_get_category("ad_tun");
 
     pthread_mutex_lock(&g_state_lock);
 
     /* If uninitialized, cleanup is a no-op */
     if (g_state == AD_TUN_STATE_UNINITIALIZED) {
         pthread_mutex_unlock(&g_state_lock);
-        zlog_info(zc, "Cleanup requested but module already uninitialized");
+        AD_LOG_TUN_INFO("Cleanup requested but module already uninitialized");
         return AD_TUN_OK;
     }
 
@@ -401,10 +386,7 @@ ad_tun_error_t ad_tun_cleanup(void)
 
     pthread_mutex_unlock(&g_state_lock);
 
-    zlog_info(zc, "Cleanup completed successfully");
-
-    /* Finalize zlog if we initialized it */
-    ad_tun_zlog_fini();
+    AD_LOG_TUN_INFO("Cleanup completed successfully");
 
     return AD_TUN_OK;
 }
@@ -432,10 +414,9 @@ ad_tun_error_t ad_tun_restart(void)
 /* Read data from the TUN interface */
 ssize_t ad_tun_read(char *buf, size_t buf_len)
 {
-    zlog_category_t *zc = zlog_get_category("ad_tun");
 
     if (!buf || buf_len == 0) {
-        zlog_error(zc, "ad_tun_read: invalid buffer");
+        AD_LOG_TUN_ERROR("ad_tun_read: invalid buffer");
         return -EINVAL;
     }
 
@@ -446,7 +427,7 @@ ssize_t ad_tun_read(char *buf, size_t buf_len)
     pthread_mutex_unlock(&g_state_lock);
 
     if (!running) {
-        zlog_error(zc, "ad_tun_read: called while module not running");
+        AD_LOG_TUN_ERROR("ad_tun_read: called while module not running");
         return -EIO;
     }
 
@@ -457,21 +438,20 @@ ssize_t ad_tun_read(char *buf, size_t buf_len)
             /* No data available */
             return -EAGAIN;
         }
-        zlog_error(zc, "ad_tun_read: read() failed: %s", strerror(errno));
+        AD_LOG_TUN_ERROR("ad_tun_read: read() failed: %s", strerror(errno));
         return -EIO;
     }
 
-    zlog_debug(zc, "ad_tun_read: read %zd bytes from TUN", n);
+    AD_LOG_TUN_DEBUG("ad_tun_read: read %zd bytes from TUN", n);
     return n;
 }
 
 /* Write data to the TUN interface */
 ssize_t ad_tun_write(const char *buf, size_t buf_len)
 {
-    zlog_category_t *zc = zlog_get_category("ad_tun");
 
     if (!buf || buf_len == 0) {
-        zlog_error(zc, "ad_tun_write: invalid buffer");
+        AD_LOG_TUN_ERROR("ad_tun_write: invalid buffer");
         return -EINVAL;
     }
 
@@ -482,7 +462,7 @@ ssize_t ad_tun_write(const char *buf, size_t buf_len)
     pthread_mutex_unlock(&g_state_lock);
 
     if (!running) {
-        zlog_error(zc, "ad_tun_write: called while module not running");
+        AD_LOG_TUN_ERROR("ad_tun_write: called while module not running");
         return -EIO;
     }
 
@@ -493,11 +473,11 @@ ssize_t ad_tun_write(const char *buf, size_t buf_len)
             /* Write would block */
             return -EAGAIN;
         }
-        zlog_error(zc, "ad_tun_write: write() failed: %s", strerror(errno));
+        AD_LOG_TUN_ERROR("ad_tun_write: write() failed: %s", strerror(errno));
         return -EIO;
     }
 
-    zlog_debug(zc, "ad_tun_write: wrote %zd bytes to TUN", n);
+    AD_LOG_TUN_DEBUG("ad_tun_write: wrote %zd bytes to TUN", n);
     return n;
 }
 
@@ -571,50 +551,6 @@ ad_tun_state_t ad_tun_get_state(void)
     pthread_mutex_unlock(&g_state_lock);
 
     return s;
-}
-
-/* zlog initialization helper */
-static int ad_tun_zlog_init(void)
-{
-    pthread_mutex_lock(&g_zlog_lock);
-
-    if (!g_zlog_initialized) {
-        if (!g_zlog_file_cfg) {
-            pthread_mutex_unlock(&g_zlog_lock);
-            fprintf(stderr, "ERR: zlog config path is NULL\n");
-            return -1;
-        }
-        if (zlog_init(g_zlog_file_cfg) != 0) {
-            pthread_mutex_unlock(&g_zlog_lock);
-            fprintf(stderr, "ERR: zlog_init failed with config '%s'\n", g_zlog_file_cfg);
-            return -1;
-        }
-        g_zlog_initialized = 1;
-    }
-
-    pthread_mutex_unlock(&g_zlog_lock);
-
-    zlog_category_t *zc = zlog_get_category("ad_tun");
-    if (!zc) {
-        fprintf(stderr, "ERR: failed to get zlog category 'ad_tun'\n");
-        return -1;
-    }
-    zlog_info(zc, "zlog initialized with config: %s", g_zlog_file_cfg);
-
-    return 0;
-}
-
-/* zlog finalization helper */
-static void ad_tun_zlog_fini(void)
-{
-    pthread_mutex_lock(&g_zlog_lock);
-    if (!g_zlog_initialized) {
-        pthread_mutex_unlock(&g_zlog_lock);
-        return;
-    }
-    zlog_fini();
-    g_zlog_initialized = 0;
-    pthread_mutex_unlock(&g_zlog_lock);
 }
 
 /* Convert error code to string */
