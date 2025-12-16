@@ -297,7 +297,7 @@ ad_tun_error_t ad_tun_start(void)
     g_tun_fd = tun_fd; /* fixed assignment */
     pthread_mutex_unlock(&g_state_lock);
 
-    AD_LOG_TUN_INFO("ad_tun_start() completed successfully");
+    AD_LOG_TUN_INFO("Started TUN interface %s successfully", cfg.ifname);
 
     return AD_TUN_OK;
 }
