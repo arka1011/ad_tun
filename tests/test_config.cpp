@@ -7,7 +7,7 @@ extern "C" {
 TEST(ConfigTest, LoadValidConfig) {
     ad_tun_config_t cfg;
 
-    ASSERT_EQ(AD_TUN_OK, ad_tun_load_config("../../test_configs/good.ini", &cfg));
+    ASSERT_EQ(AD_TUN_OK, ad_tun_load_config("configs/good.ini", &cfg));
 
     EXPECT_STREQ(cfg.ifname, "ad_tun0");
     EXPECT_STREQ(cfg.ipv4, "10.10.1.2/24");
@@ -21,21 +21,21 @@ TEST(ConfigTest, MissingIfnameFails) {
     ad_tun_config_t cfg;
 
     EXPECT_EQ(AD_TUN_ERR_CONFIG,
-              ad_tun_load_config("../../test_configs/missing_ifname.ini", &cfg));
+              ad_tun_load_config("configs/missing_ifname.ini", &cfg));
 }
 
 TEST(ConfigTest, MissingIpv4Fails) {
     ad_tun_config_t cfg;
 
     EXPECT_EQ(AD_TUN_ERR_CONFIG,
-              ad_tun_load_config("../../test_configs/missing_ipv4.ini", &cfg));
+              ad_tun_load_config("configs/missing_ipv4.ini", &cfg));
 }
 
 TEST(ConfigTest, MissingIpv6MtuPersistAllowed) {
     ad_tun_config_t cfg;
 
     ASSERT_EQ(AD_TUN_OK,
-              ad_tun_load_config("../../test_configs/missing_ipv6MtuPersist.ini", &cfg));
+              ad_tun_load_config("configs/missing_ipv6MtuPersist.ini", &cfg));
 
     EXPECT_STREQ(cfg.ifname, "ad_tun0");
     EXPECT_STREQ(cfg.ipv4, "10.10.1.2/24");
@@ -50,14 +50,14 @@ TEST(ConfigTest, FileNotFound) {
     ad_tun_config_t cfg;
 
     EXPECT_EQ(AD_TUN_ERR_CONFIG,
-              ad_tun_load_config("../../test_configs/this_file_does_not_exist.ini", &cfg));
+              ad_tun_load_config("configs/this_file_does_not_exist.ini", &cfg));
 }
 
 TEST(ConfigTest, InvalidMtuFallsBackToDefault) {
     ad_tun_config_t cfg;
 
     ASSERT_EQ(AD_TUN_OK,
-              ad_tun_load_config("../../test_configs/invalid_mtu.ini", &cfg));
+              ad_tun_load_config("configs/invalid_mtu.ini", &cfg));
 
     EXPECT_EQ(cfg.mtu, 1500); // DEFAULT_MTU
 
@@ -68,7 +68,7 @@ TEST(ConfigTest, InvalidPersistFallsBackToDefault) {
     ad_tun_config_t cfg;
 
     ASSERT_EQ(AD_TUN_OK,
-              ad_tun_load_config("../../test_configs/invalid_persist.ini", &cfg));
+              ad_tun_load_config("configs/invalid_persist.ini", &cfg));
 
     EXPECT_EQ(cfg.persist, 0); // DEFAULT_PERSIST
 
@@ -79,14 +79,14 @@ TEST(ConfigTest, MalformedIniFails) {
     ad_tun_config_t cfg;
 
     EXPECT_EQ(AD_TUN_ERR_CONFIG,
-              ad_tun_load_config("../../test_configs/malformed.ini", &cfg));
+              ad_tun_load_config("configs/malformed.ini", &cfg));
 }
 
 TEST(ConfigTest, UnknownKeyIsIgnored) {
     ad_tun_config_t cfg;
 
     ASSERT_EQ(AD_TUN_OK,
-              ad_tun_load_config("../../test_configs/unknown_key.ini", &cfg));
+              ad_tun_load_config("configs/unknown_key.ini", &cfg));
 
     EXPECT_STREQ(cfg.ifname, "ad_tun0");
     EXPECT_STREQ(cfg.ipv4, "10.10.1.2/24");
@@ -100,14 +100,14 @@ TEST(ConfigTest, EmptyIfnameValueFails) {
 
     // ifname is present but empty
     EXPECT_EQ(AD_TUN_ERR_CONFIG,
-              ad_tun_load_config("../../test_configs/empty_ifname.ini", &cfg));
+              ad_tun_load_config("configs/empty_ifname.ini", &cfg));
 }
 
 TEST(ConfigTest, Ipv6EmptyIsAllowed) {
     ad_tun_config_t cfg;
 
     ASSERT_EQ(AD_TUN_OK,
-              ad_tun_load_config("../../test_configs/ipv6_empty.ini", &cfg));
+              ad_tun_load_config("configs/ipv6_empty.ini", &cfg));
 
     EXPECT_STREQ(cfg.ifname, "ad_tun0");
     EXPECT_STREQ(cfg.ipv4, "10.10.1.2/24");
@@ -120,7 +120,7 @@ TEST(ConfigTest, MtuTooLargeFallsBackToDefault) {
     ad_tun_config_t cfg;
 
     ASSERT_EQ(AD_TUN_OK,
-              ad_tun_load_config("../../test_configs/mtu_toolarge.ini", &cfg));
+              ad_tun_load_config("configs/mtu_toolarge.ini", &cfg));
 
     EXPECT_EQ(cfg.mtu, 1500); // DEFAULT_MTU used for overly large MTU
 
@@ -131,14 +131,14 @@ TEST(ConfigTest, KeysInWrongSectionFails) {
     ad_tun_config_t cfg;
 
     EXPECT_EQ(AD_TUN_ERR_CONFIG,
-              ad_tun_load_config("../../test_configs/wrong_section.ini", &cfg));
+              ad_tun_load_config("configs/wrong_section.ini", &cfg));
 }
 
 TEST(ConfigTest, DuplicateIfnameUsesLast) {
     ad_tun_config_t cfg;
 
     ASSERT_EQ(AD_TUN_OK,
-              ad_tun_load_config("../../test_configs/duplicate_keys.ini", &cfg));
+              ad_tun_load_config("configs/duplicate_keys.ini", &cfg));
 
     EXPECT_STREQ(cfg.ifname, "ad_tun1");
     EXPECT_STREQ(cfg.ipv4, "10.10.1.2/24");
